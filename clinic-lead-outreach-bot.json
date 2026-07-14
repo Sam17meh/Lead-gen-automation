@@ -1,0 +1,330 @@
+{
+  "name": "Clinic Lead Sourcing + Outreach Bot",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-1",
+      "name": "Manual Test Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-1",
+      "name": "Daily 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 460]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "city",
+              "type": "string",
+              "value": "Kanpur"
+            },
+            {
+              "id": "a2",
+              "name": "keyword",
+              "type": "string",
+              "value": "dental clinic"
+            },
+            {
+              "id": "a3",
+              "name": "maxResults",
+              "type": "number",
+              "value": 20
+            }
+          ]
+        }
+      },
+      "id": "config-1",
+      "name": "Search Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [20, 380]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/textsearch/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.keyword }} in {{ $json.city }}"
+            },
+            {
+              "name": "key",
+              "value": "={{ $env.GOOGLE_PLACES_API_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "places-search-1",
+      "name": "Google Places Text Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 380]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      },
+      "id": "split-out-1",
+      "name": "Split Out Places",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [460, 380]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-batches-1",
+      "name": "Loop Over Places",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 380]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/details/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "place_id",
+              "value": "={{ $json.place_id }}"
+            },
+            {
+              "name": "fields",
+              "value": "name,formatted_phone_number,international_phone_number,website,formatted_address,rating,user_ratings_total"
+            },
+            {
+              "name": "key",
+              "value": "={{ $env.GOOGLE_PLACES_API_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "place-details-1",
+      "name": "Get Place Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Score each lead based on how much they need a new/better website\nconst result = $input.first().json.result || {};\n\nconst hasWebsite = !!result.website;\nconst isJustdialOrPractoOnly = hasWebsite && /justdial|practo|sulekha|facebook\\.com/i.test(result.website);\n\nlet score = 0;\nif (!hasWebsite) score += 3;\nif (isJustdialOrPractoOnly) score += 2;\nif (result.formatted_phone_number || result.international_phone_number) score += 1;\nif ((result.user_ratings_total || 0) > 5) score += 1; // established, real business\n\nreturn [{\n  json: {\n    name: result.name || '',\n    phone: result.formatted_phone_number || result.international_phone_number || '',\n    website: result.website || '',\n    address: result.formatted_address || '',\n    rating: result.rating || null,\n    review_count: result.user_ratings_total || 0,\n    score,\n    qualified: score >= 3,\n    status: 'new',\n    date_added: new Date().toISOString().split('T')[0]\n  }\n}];\n"
+      },
+      "id": "score-lead-1",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.qualified }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "cond2",
+              "leftValue": "={{ $json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-qualified-1",
+      "name": "Qualified & Has Phone?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1340, 320]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "sheets-append-1",
+      "name": "Log Lead to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1560, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the WhatsApp message text — personalized, references clinic name\nconst lead = $input.first().json;\nconst loomLink = 'https://loom.com/share/YOUR_LOOM_ID'; // swap per template used\n\nconst message = `Hi! I noticed ${lead.name} doesn't have a dedicated website yet (or the current listing could use an upgrade). I put together a quick 90-second preview of what a booking-ready site could look like for your clinic: ${loomLink}\\n\\nNo obligation — just wanted to share since I build these for clinics in ${lead.address.split(',').slice(-2)[0] || 'your area'}. Happy to chat if it's useful!`;\n\nreturn [{ json: { ...lead, message } }];\n"
+      },
+      "id": "build-message-1",
+      "name": "Build Outreach Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/v19.0/' + $env.WHATSAPP_PHONE_NUMBER_ID + '/messages' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.WHATSAPP_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: \"whatsapp\", to: $json.phone.replace(/[^0-9]/g, ''), type: \"text\", text: { body: $json.message } }) }}",
+        "options": {}
+      },
+      "id": "send-whatsapp-1",
+      "name": "Send WhatsApp Outreach",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 400]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "phone": "={{ $json.phone }}",
+            "status": "contacted_day0",
+            "date_contacted": "={{ new Date().toISOString().split('T')[0] }}"
+          },
+          "matchingColumns": ["phone"]
+        },
+        "options": {}
+      },
+      "id": "sheets-update-1",
+      "name": "Update Status: Contacted",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2000, 400]
+    }
+  ],
+  "connections": {
+    "Manual Test Trigger": {
+      "main": [[{ "node": "Search Config", "type": "main", "index": 0 }]]
+    },
+    "Daily 9AM": {
+      "main": [[{ "node": "Search Config", "type": "main", "index": 0 }]]
+    },
+    "Search Config": {
+      "main": [[{ "node": "Google Places Text Search", "type": "main", "index": 0 }]]
+    },
+    "Google Places Text Search": {
+      "main": [[{ "node": "Split Out Places", "type": "main", "index": 0 }]]
+    },
+    "Split Out Places": {
+      "main": [[{ "node": "Loop Over Places", "type": "main", "index": 0 }]]
+    },
+    "Loop Over Places": {
+      "main": [
+        [{ "node": "Get Place Details", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Get Place Details": {
+      "main": [[{ "node": "Score Lead", "type": "main", "index": 0 }]]
+    },
+    "Score Lead": {
+      "main": [[{ "node": "Qualified & Has Phone?", "type": "main", "index": 0 }]]
+    },
+    "Qualified & Has Phone?": {
+      "main": [
+        [
+          { "node": "Log Lead to Sheet", "type": "main", "index": 0 },
+          { "node": "Build Outreach Message", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Loop Over Places", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Outreach Message": {
+      "main": [[{ "node": "Send WhatsApp Outreach", "type": "main", "index": 0 }]]
+    },
+    "Send WhatsApp Outreach": {
+      "main": [[{ "node": "Update Status: Contacted", "type": "main", "index": 0 }]]
+    },
+    "Update Status: Contacted": {
+      "main": [[{ "node": "Loop Over Places", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
